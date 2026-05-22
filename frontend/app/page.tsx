@@ -16,52 +16,66 @@ export default function Home() {
   const [selectedFile, setSelectedFile] = useState<any>(null);
   const [analysis, setAnalysis] = useState<any>(null);
 
-  // 🔥 Fetch roads + complaints
+  // 🔥 Fetch data
   useEffect(() => {
     axios.get("http://127.0.0.1:8000/roads")
-      .then(res => setRoadData(res.data));
+      .then(res => setRoadData(res.data))
+      .catch(err => console.error("Roads error:", err));
 
     fetchComplaints();
   }, []);
 
   const fetchComplaints = () => {
     axios.get("http://127.0.0.1:8000/complaints")
-      .then(res => setComplaints(res.data));
+      .then(res => setComplaints(res.data))
+      .catch(err => console.error("Complaints error:", err));
   };
 
-  // 🔥 Submit complaint (manual type)
+  // 🔥 Manual complaint
   const submitComplaint = async (type: string) => {
-    await axios.post("http://127.0.0.1:8000/report", {
-      type,
-      location: clickedLocation
-    });
+    if (!clickedLocation) return;
 
-    setClickedLocation(null);
-    fetchComplaints();
+    try {
+      await axios.post("http://127.0.0.1:8000/report", {
+        type,
+        location: clickedLocation
+      });
+
+      setClickedLocation(null);
+      fetchComplaints();
+
+    } catch (err) {
+      console.error("Submit error:", err);
+    }
   };
 
-  // 🔥 Upload image + AI analysis
+  // 🔥 AI upload
   const uploadImage = async () => {
     if (!selectedFile || !clickedLocation) return;
 
     const formData = new FormData();
     formData.append("file", selectedFile);
 
-    const res = await axios.post(
-      "http://127.0.0.1:8000/upload",
-      formData
-    );
+    try {
+      const res = await axios.post(
+        "http://127.0.0.1:8000/upload",
+        formData
+      );
 
-    setAnalysis(res.data.analysis);
+      setAnalysis(res.data.analysis);
 
-    // 🔥 Save AI result as complaint
-    await axios.post("http://127.0.0.1:8000/report", {
-      type: res.data.analysis.issue,
-      severity: res.data.analysis.severity,
-      location: clickedLocation
-    });
+      await axios.post("http://127.0.0.1:8000/report", {
+        type: res.data.analysis.issue,
+        severity: res.data.analysis.severity,
+        location: clickedLocation
+      });
 
-    fetchComplaints();
+      fetchComplaints();
+      setClickedLocation(null);
+
+    } catch (err) {
+      console.error("Upload error:", err);
+    }
   };
 
   return (
@@ -81,7 +95,7 @@ export default function Home() {
           const { lng, lat } = e.lngLat;
           setClickedLocation({ lng, lat });
 
-          const feature = e.features && e.features[0];
+          const feature = e.features?.[0];
           if (feature) {
             setInfo(feature.properties);
           }
@@ -90,43 +104,84 @@ export default function Home() {
         interactiveLayerIds={["roads-layer"]}
       >
 
-        {/* Roads */}
+        {/* ✅ Roads with condition color */}
         {roadData && (
           <Source id="roads" type="geojson" data={roadData}>
             <Layer
               id="roads-layer"
               type="line"
               paint={{
-                "line-color": "#00ff00",
+                "line-color": [
+                  "case",
+                  ["==", ["get", "condition"], "Good"], "#00ff00",
+                  ["==", ["get", "condition"], "Poor"], "#ff0000",
+                  "#ffff00"
+                ],
                 "line-width": 5
               }}
             />
           </Source>
         )}
 
-        {/* Complaint markers */}
-        {complaints.map((c, i) => (
-          <Marker key={i} longitude={c.location.lng} latitude={c.location.lat}>
-            <div className="text-red-500 text-xl">📍</div>
-          </Marker>
-        ))}
+        {/* 📍 Complaint markers */}
+        {complaints.map((c, i) => {
+          if (!c.location) return null;
+
+          return (
+            <Marker
+              key={i}
+              longitude={c.location.lng}
+              latitude={c.location.lat}
+            >
+              <div
+                className="text-red-500 text-xl cursor-pointer"
+                onClick={() => setInfo(c)}
+              >
+                📍
+              </div>
+            </Marker>
+          );
+        })}
 
       </Map>
 
-      {/* Road Info */}
+      {/* 🧠 INFO PANEL */}
       {info && (
-        <div className="absolute bottom-4 left-4 bg-black text-white p-4 rounded">
-          <h2 className="font-bold">{info.name}</h2>
-          <p>Type: {info.type}</p>
+        <div className="absolute bottom-4 left-4 bg-black text-white p-4 rounded w-72">
+          <h2 className="font-bold text-lg">{info.name || "Road Issue"}</h2>
+
+          {/* Road Info */}
+          {info.type && <p>Type: {info.type}</p>}
+          {info.condition && <p>Condition: {info.condition}</p>}
+          {info.lastRepaired && <p>Last Repair: {info.lastRepaired}</p>}
+
+          {/* Budget + Contractor */}
+          {info.contractor && (
+            <>
+              <p className="mt-2">Contractor: {info.contractor}</p>
+              <p>Sanctioned: ₹{info.budgetSanctioned}</p>
+              <p>Spent: ₹{info.budgetSpent}</p>
+
+              {info.budgetSpent > info.budgetSanctioned && (
+                <p className="text-red-400 font-bold">
+                  ⚠️ Overspending Detected
+                </p>
+              )}
+            </>
+          )}
+
+          {/* Complaint Info */}
+          {info.type && <p className="mt-2">Issue: {info.type}</p>}
+          {info.severity && <p>Severity: {info.severity}</p>}
         </div>
       )}
 
-      {/* Complaint + Upload UI */}
+      {/* 📤 REPORT UI */}
       {clickedLocation && (
         <div className="absolute top-4 left-4 bg-white p-4 rounded shadow w-64">
           <h2 className="font-bold">Report Issue</h2>
 
-          {/* Manual buttons */}
+          {/* Manual */}
           <button
             className="bg-red-500 text-white px-3 py-1 mt-2"
             onClick={() => submitComplaint("Pothole")}
@@ -144,7 +199,7 @@ export default function Home() {
           {/* Upload */}
           <input
             type="file"
-            onChange={(e: any) => setSelectedFile(e.target.files[0])}
+            onChange={(e: any) => setSelectedFile(e.target.files?.[0])}
             className="mt-3"
           />
 
@@ -168,3 +223,4 @@ export default function Home() {
     </div>
   );
 }
+
