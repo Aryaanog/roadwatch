@@ -9,6 +9,7 @@ class Complaint(Base):
     severity = Column(String)
     lat = Column(Float)
     lng = Column(Float)
+    road_id = Column(Integer)   
 
 class Road(Base):
     __tablename__ = "roads"

@@ -112,10 +112,12 @@ export default function Home() {
               type="line"
               paint={{
                 "line-color": [
-                  "case",
-                  ["==", ["get", "condition"], "Good"], "#00ff00",
-                  ["==", ["get", "condition"], "Poor"], "#ff0000",
-                  "#ffff00"
+                  "match",
+                  ["get", "condition"],
+                  "Good", "#00FF00",
+                  "Average", "#FFD700",
+                  "Poor", "#FF0000",
+                  "#888888"
                 ],
                 "line-width": 5
               }}
@@ -123,9 +125,12 @@ export default function Home() {
           </Source>
         )}
 
-        {/* 📍 Complaint markers */}
         {complaints.map((c, i) => {
           if (!c.location) return null;
+
+          let color = "green";
+          if (c.severity === "High") color = "red";
+          else if (c.severity === "Medium") color = "yellow";
 
           return (
             <Marker
@@ -134,15 +139,19 @@ export default function Home() {
               latitude={c.location.lat}
             >
               <div
-                className="text-red-500 text-xl cursor-pointer"
                 onClick={() => setInfo(c)}
-              >
-                📍
-              </div>
+                style={{
+                  width: "14px",
+                  height: "14px",
+                  backgroundColor: color,
+                  borderRadius: "50%",
+                  cursor: "pointer",
+                  border: "2px solid white"
+                }}
+              />
             </Marker>
           );
         })}
-
       </Map>
 
       {/* 🧠 INFO PANEL */}
@@ -170,9 +179,13 @@ export default function Home() {
             </>
           )}
 
-          {/* Complaint Info */}
-          {info.type && <p className="mt-2">Issue: {info.type}</p>}
-          {info.severity && <p>Severity: {info.severity}</p>}
+          {/* Detect if it's complaint */}
+          {info.severity && (
+            <>
+              <p className="mt-2">Issue: {info.type}</p>
+              <p>Severity: {info.severity}</p>
+            </>
+          )}
         </div>
       )}
 
