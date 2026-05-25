@@ -7,79 +7,119 @@ import axios from "axios";
 
 export default function Home() {
 
-  const [info, setInfo] = useState<any>(null);
   const [roadData, setRoadData] = useState<any>(null);
-
-  const [clickedLocation, setClickedLocation] = useState<any>(null);
   const [complaints, setComplaints] = useState<any[]>([]);
+  const [clickedLocation, setClickedLocation] = useState<any>(null);
 
-  const [selectedFile, setSelectedFile] = useState<any>(null);
-  const [analysis, setAnalysis] = useState<any>(null);
+  const [isOnline, setIsOnline] = useState(true);
+  const [pendingCount, setPendingCount] = useState(0);
 
-  // 🔥 Fetch data
+  // ✅ SAFE localStorage
+  const getPending = () => {
+    if (typeof window === "undefined") return [];
+    return JSON.parse(localStorage.getItem("pending") || "[]");
+  };
+
+  const updatePendingCount = () => {
+    setPendingCount(getPending().length);
+  };
+
+  // 🔥 SYNC
+  const syncPending = async () => {
+    const pending = getPending();
+    if (!pending.length) return;
+
+    const remaining = [];
+
+    for (let p of pending) {
+      try {
+        await axios.post("http://127.0.0.1:8000/report", p);
+      } catch {
+        remaining.push(p);
+      }
+    }
+
+    localStorage.setItem("pending", JSON.stringify(remaining));
+    updatePendingCount();
+    fetchComplaints();
+  };
+
   useEffect(() => {
+
+    setIsOnline(navigator.onLine);
+    updatePendingCount();
+
+    window.addEventListener("online", () => {
+      setIsOnline(true);
+      syncPending();
+    });
+
+    window.addEventListener("offline", () => {
+      setIsOnline(false);
+    });
+
+    // ROADS
     axios.get("http://127.0.0.1:8000/roads")
-      .then(res => setRoadData(res.data))
-      .catch(err => console.error("Roads error:", err));
+      .then(res => {
+        setRoadData(res.data);
+        localStorage.setItem("roads", JSON.stringify(res.data));
+      })
+      .catch(() => {
+        const cached = localStorage.getItem("roads");
+        if (cached) setRoadData(JSON.parse(cached));
+      });
 
     fetchComplaints();
+    syncPending();
+
   }, []);
 
   const fetchComplaints = () => {
     axios.get("http://127.0.0.1:8000/complaints")
-      .then(res => setComplaints(res.data))
-      .catch(err => console.error("Complaints error:", err));
+      .then(res => {
+        setComplaints(res.data);
+        localStorage.setItem("complaints", JSON.stringify(res.data));
+      })
+      .catch(() => {
+        const cached = localStorage.getItem("complaints");
+        if (cached) setComplaints(JSON.parse(cached));
+      });
   };
 
-  // 🔥 Manual complaint
+  // 🔥 SUBMIT
   const submitComplaint = async (type: string) => {
     if (!clickedLocation) return;
 
-    try {
-      await axios.post("http://127.0.0.1:8000/report", {
-        type,
-        location: clickedLocation
-      });
-
-      setClickedLocation(null);
-      fetchComplaints();
-
-    } catch (err) {
-      console.error("Submit error:", err);
-    }
-  };
-
-  // 🔥 AI upload
-  const uploadImage = async () => {
-    if (!selectedFile || !clickedLocation) return;
-
-    const formData = new FormData();
-    formData.append("file", selectedFile);
+    const payload = { type, location: clickedLocation };
 
     try {
-      const res = await axios.post(
-        "http://127.0.0.1:8000/upload",
-        formData
-      );
-
-      setAnalysis(res.data.analysis);
-
-      await axios.post("http://127.0.0.1:8000/report", {
-        type: res.data.analysis.issue,
-        severity: res.data.analysis.severity,
-        location: clickedLocation
-      });
-
+      await axios.post("http://127.0.0.1:8000/report", payload);
       fetchComplaints();
-      setClickedLocation(null);
-
-    } catch (err) {
-      console.error("Upload error:", err);
+    } catch {
+      const pending = getPending();
+      pending.push(payload);
+      localStorage.setItem("pending", JSON.stringify(pending));
+      updatePendingCount();
     }
+
+    setClickedLocation(null);
   };
 
   return (
     <div className="w-screen h-screen">
+
+      {/* 🌐 STATUS */}
+      {!isOnline && (
+        <div className="absolute top-4 right-4 bg-red-500 text-white px-3 py-1 rounded z-50">
+          Offline Mode
+        </div>
+      )}
+
+      {pendingCount > 0 && (
+        <div className="absolute top-12 right-4 bg-yellow-400 text-black px-3 py-1 rounded z-50">
+          {pendingCount} pending sync
+        </div>
+      )}
 
       <Map
         reuseMaps
@@ -89,151 +129,86 @@ export default function Home() {
           latitude: 28.6139,
           zoom: 12
         }}
-        mapStyle="mapbox://styles/mapbox/dark-v11"
+
+        // ✅ GOOGLE-LIKE STYLE
+        mapStyle="mapbox://styles/mapbox/streets-v12"
 
         onClick={(e) => {
           const { lng, lat } = e.lngLat;
           setClickedLocation({ lng, lat });
-
-          const feature = e.features?.[0];
-          if (feature) {
-            setInfo(feature.properties);
-          }
         }}
-
-        interactiveLayerIds={["roads-layer"]}
       >
 
-        {/* ✅ Roads with condition color */}
+        {/* ✅ CLEAN ROADS (NO  FILTER BUG) */}
         {roadData && (
           <Source id="roads" type="geojson" data={roadData}>
             <Layer
               id="roads-layer"
               type="line"
               paint={{
+                // ✅ subtle colors like Google Maps
                 "line-color": [
                   "match",
                   ["get", "condition"],
-                  "Good", "#00FF00",
-                  "Average", "#FFD700",
-                  "Poor", "#FF0000",
-                  "#888888"
+                  "Good", "#4CAF50",
+                  "Average", "#FFC107",
+                  "Poor", "#F44336",
+                  "#999999"
                 ],
-                "line-width": 5
+
+                // ✅ width based on road type
+                "line-width": [
+                  "match",
+                  ["get", "type"],
+                  "NH", 6,
+                  "SH", 4,
+                  "Local", 2,
+                  2
+                ],
+
+                "line-opacity": 0.8,
               }}
             />
           </Source>
         )}
 
+        {/* 📍 MARKERS */}
         {complaints.map((c, i) => {
           if (!c.location) return null;
 
           let color = "green";
           if (c.severity === "High") color = "red";
-          else if (c.severity === "Medium") color = "yellow";
+          else if (c.severity === "Medium") color = "orange";
 
           return (
-            <Marker
-              key={i}
-              longitude={c.location.lng}
-              latitude={c.location.lat}
-            >
+            <Marker key={i} longitude={c.location.lng} latitude={c.location.lat}>
               <div
-                onClick={() => setInfo(c)}
                 style={{
-                  width: "14px",
-                  height: "14px",
+                  width: "12px",
+                  height: "12px",
                   backgroundColor: color,
                   borderRadius: "50%",
-                  cursor: "pointer",
                   border: "2px solid white"
                 }}
               />
             </Marker>
           );
         })}
+
       </Map>
 
-      {/* 🧠 INFO PANEL */}
-      {info && (
-        <div className="absolute bottom-4 left-4 bg-black text-white p-4 rounded w-72">
-          <h2 className="font-bold text-lg">{info.name || "Road Issue"}</h2>
-
-          {/* Road Info */}
-          {info.type && <p>Type: {info.type}</p>}
-          {info.condition && <p>Condition: {info.condition}</p>}
-          {info.lastRepaired && <p>Last Repair: {info.lastRepaired}</p>}
-
-          {/* Budget + Contractor */}
-          {info.contractor && (
-            <>
-              <p className="mt-2">Contractor: {info.contractor}</p>
-              <p>Sanctioned: ₹{info.budgetSanctioned}</p>
-              <p>Spent: ₹{info.budgetSpent}</p>
-
-              {info.budgetSpent > info.budgetSanctioned && (
-                <p className="text-red-400 font-bold">
-                  ⚠️ Overspending Detected
-                </p>
-              )}
-            </>
-          )}
-
-          {/* Detect if it's complaint */}
-          {info.severity && (
-            <>
-              <p className="mt-2">Issue: {info.type}</p>
-              <p>Severity: {info.severity}</p>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* 📤 REPORT UI */}
+      {/* 📤 REPORT */}
       {clickedLocation && (
-        <div className="absolute top-4 left-4 bg-white p-4 rounded shadow w-64">
-          <h2 className="font-bold">Report Issue</h2>
-
-          {/* Manual */}
+        <div className="absolute top-4 left-4 bg-white p-4 rounded shadow">
           <button
-            className="bg-red-500 text-white px-3 py-1 mt-2"
+            className="bg-red-500 text-white px-3 py-1"
             onClick={() => submitComplaint("Pothole")}
           >
             Pothole
           </button>
-
-          <button
-            className="bg-yellow-500 text-white px-3 py-1 mt-2 ml-2"
-            onClick={() => submitComplaint("Damaged Road")}
-          >
-            Damaged Road
-          </button>
-
-          {/* Upload */}
-          <input
-            type="file"
-            onChange={(e: any) => setSelectedFile(e.target.files?.[0])}
-            className="mt-3"
-          />
-
-          <button
-            className="bg-blue-500 text-white px-3 py-1 mt-2 w-full"
-            onClick={uploadImage}
-          >
-            Upload & Analyze
-          </button>
-
-          {/* AI Result */}
-          {analysis && (
-            <div className="mt-3 text-sm">
-              <p><b>Issue:</b> {analysis.issue}</p>
-              <p><b>Severity:</b> {analysis.severity}</p>
-            </div>
-          )}
         </div>
       )}
 
     </div>
   );
 }
-

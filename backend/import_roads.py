@@ -5,13 +5,27 @@ import random
 from database import SessionLocal
 from models import Road
 
+
+# ✅ Better classification (UI-friendly)
 def classify_road(highway):
     if highway in ["motorway", "trunk"]:
-        return "NH"
-    elif highway in ["primary", "secondary"]:
-        return "SH"
+        return "primary"
+    elif highway in ["primary"]:
+        return "primary"
+    elif highway in ["secondary"]:
+        return "secondary"
     else:
-        return "Local"
+        return "tertiary"
+
+
+# ✅ Ignore useless small roads
+def is_valid_road(highway):
+    return highway in [
+        "motorway", "trunk",
+        "primary", "secondary",
+        "tertiary"
+    ]
+
 
 def import_roads():
     db = SessionLocal()
@@ -28,41 +42,59 @@ def import_roads():
         props = feature.get("properties", {})
         geometry = feature.get("geometry", {})
 
-        if geometry.get("type") != "LineString":
+        highway = props.get("highway")
+
+        # ❌ skip garbage roads
+        if not is_valid_road(highway):
             continue
 
-        coords = geometry.get("coordinates", [])
-        if len(coords) < 2:
+        coords_list = []
+
+        # ✅ handle BOTH types
+        if geometry.get("type") == "LineString":
+            coords_list = [geometry.get("coordinates", [])]
+
+        elif geometry.get("type") == "MultiLineString":
+            coords_list = geometry.get("coordinates", [])
+
+        else:
             continue
 
-        start = coords[0]
-        end = coords[-1]
+        for coords in coords_list:
 
-        highway = props.get("highway", "unknown")
+            if len(coords) < 2:
+                continue
 
-        road = Road(
-            name=props.get("name", "Unnamed Road"),
-            type=classify_road(highway),
+            geometry_json = json.dumps(coords)
 
-            start_lat=start[1],
-            start_lng=start[0],
-            end_lat=end[1],
-            end_lng=end[0],
+            road = Road(
+                name=props.get("name", "Unnamed Road"),
 
-            # dummy realistic data
-            contractor=random.choice(["ABC Infra", "XYZ Constructions", "Govt Works"]),
-            lastRepaired=str(random.randint(2015, 2024)),
+                # ✅ consistent with frontend
+                type=classify_road(highway),
 
-            budgetSanctioned=random.randint(1000000, 10000000),
-            budgetSpent=random.randint(800000, 12000000)
-        )
+                condition="Good",  # ✅ IMPORTANT FIX
 
-        db.add(road)
-        count += 1
+                geometry=geometry_json,
 
-        if count % 500 == 0:
-            db.commit()
-            print(f"{count} roads inserted...")
+                contractor=random.choice([
+                    "ABC Infra",
+                    "XYZ Constructions",
+                    "Govt Works"
+                ]),
+
+                lastRepaired=str(random.randint(2015, 2024)),
+
+                budgetSanctioned=random.randint(1_000_000, 10_000_000),
+                budgetSpent=random.randint(800_000, 12_000_000)
+            )
+
+            db.add(road)
+            count += 1
+
+            if count % 500 == 0:
+                db.commit()
+                print(f"{count} roads inserted...")
 
     db.commit()
     db.close()

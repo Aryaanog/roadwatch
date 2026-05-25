@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float
+from sqlalchemy import Column, Integer, String, Float, Text
 from database import Base   # ✅ FIXED
 
 class Complaint(Base):
@@ -25,7 +25,4 @@ class Road(Base):
     budgetSanctioned = Column(Integer)
     budgetSpent = Column(Integer)
 
-    start_lat = Column(Float)
-    start_lng = Column(Float)
-    end_lat = Column(Float)
-    end_lng = Column(Float)
+    geometry = Column(Text)

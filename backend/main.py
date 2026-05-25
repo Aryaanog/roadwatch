@@ -25,6 +25,40 @@ app.add_middleware(
 Base.metadata.create_all(bind=engine)
 
 
+# def update_road_conditions():
+#     db = SessionLocal()
+
+#     roads = db.query(Road).all()
+#     complaints = db.query(Complaint).all()
+
+#     for road in roads:
+#         score = 0
+
+#         for c in complaints:
+#             # distance from road start (simple approximation)
+#             dist = sqrt(
+#                 (road.start_lat - c.lat) ** 2 +
+#                 (road.start_lng - c.lng) ** 2
+#             )
+
+#             if dist < 0.01:  # nearby
+#                 if c.severity == "High":
+#                     score += 3
+#                 elif c.severity == "Medium":
+#                     score += 2
+#                 else:
+#                     score += 1
+
+#         # 🎯 classify
+#         if score >= 10:
+#             road.condition = "Poor"
+#         elif score >= 5:
+#             road.condition = "Average"
+#         else:
+#             road.condition = "Good"
+
+#     db.commit()
+#     db.close()
 
 import math
 
@@ -57,6 +91,9 @@ def find_nearest_road(db, lat, lng):
     min_distance = float("inf")
     nearest_road_id = None
 
+    if min_distance > 0.0005:
+        return None  
+
     for road in roads:
         # simple distance using start point
         dist = math.sqrt(
@@ -72,6 +109,7 @@ def find_nearest_road(db, lat, lng):
 
 @app.get("/roads")
 def get_roads():
+    # update_road_conditions() 
     db = SessionLocal()
 
     roads = db.query(Road).all()
@@ -105,16 +143,20 @@ def get_roads():
                 "lastRepaired": r.lastRepaired,
                 "contractor": r.contractor,
                 "budgetSanctioned": r.budgetSanctioned,
-                "budgetSpent": r.budgetSpent
+                "budgetSpent": r.budgetSpent,
+                "complaints": count,
+
             },
             "geometry": {
                 "type": "LineString",
-                "coordinates": [
-                    [r.start_lng, r.start_lat],
-                    [r.end_lng, r.end_lat]
-                ]
+                "coordinates": json.loads(r.geometry)
             }
         })
+
+        
+        # print(len(json.loads(r.geometry)))
+
+    
 
     db.close()
 
