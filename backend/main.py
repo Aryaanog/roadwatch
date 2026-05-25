@@ -24,41 +24,11 @@ app.add_middleware(
 # CREATE TABLES
 Base.metadata.create_all(bind=engine)
 
+from ultralytics import YOLO
+import cv2
 
-# def update_road_conditions():
-#     db = SessionLocal()
+model = YOLO("yolov8n.pt")  # lightweight model
 
-#     roads = db.query(Road).all()
-#     complaints = db.query(Complaint).all()
-
-#     for road in roads:
-#         score = 0
-
-#         for c in complaints:
-#             # distance from road start (simple approximation)
-#             dist = sqrt(
-#                 (road.start_lat - c.lat) ** 2 +
-#                 (road.start_lng - c.lng) ** 2
-#             )
-
-#             if dist < 0.01:  # nearby
-#                 if c.severity == "High":
-#                     score += 3
-#                 elif c.severity == "Medium":
-#                     score += 2
-#                 else:
-#                     score += 1
-
-#         # 🎯 classify
-#         if score >= 10:
-#             road.condition = "Poor"
-#         elif score >= 5:
-#             road.condition = "Average"
-#         else:
-#             road.condition = "Good"
-
-#     db.commit()
-#     db.close()
 
 import math
 
@@ -86,25 +56,29 @@ def distance_point_to_line(px, py, x1, y1, x2, y2):
 import math
 
 def find_nearest_road(db, lat, lng):
-    roads = db.query(Road).all()  # ✅ must be iterable
+    roads = db.query(Road).all()
 
     min_distance = float("inf")
     nearest_road_id = None
 
-    if min_distance > 0.0005:
-        return None  
-
     for road in roads:
-        # simple distance using start point
-        dist = math.sqrt(
-            (road.start_lat - lat) ** 2 +
-            (road.start_lng - lng) ** 2
-        )
+        coords = json.loads(road.geometry)
 
-        if dist < min_distance:
-            min_distance = dist
-            nearest_road_id = road.id
+        for i in range(len(coords) - 1):
+            x1, y1 = coords[i]
+            x2, y2 = coords[i + 1]
 
+            dist = distance_point_to_line(lng, lat, x1, y1, x2, y2)
+
+            if dist < min_distance:
+                min_distance = dist
+                nearest_road_id = road.id
+
+    # threshold (important)
+    if min_distance > 0.0005:
+        return None
+
+    print("Assigned road_id:", nearest_road_id)
     return nearest_road_id
 
 @app.get("/roads")
@@ -173,6 +147,7 @@ def report_issue(data: dict):
     lng = data["location"]["lng"]
 
     road_id = find_nearest_road(db, lat, lng)  # 🔥 NEW
+    print("Assigned road_id:", road_id)
 
     new_complaint = Complaint(
         type=data.get("type"),
@@ -215,22 +190,39 @@ def get_complaints():
     return result
 
 
-# 🔥 FILE UPLOAD
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
+    os.makedirs("uploads", exist_ok=True)
+
     file_location = f"uploads/{file.filename}"
 
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    result = {
-        "issue": "Pothole",
-        "severity": "High"
-    }
+    # YOLO inference
+    results = model(file_location)
+    detections = results[0].boxes
+
+    if len(detections) == 0:
+        issue = "No issue detected"
+        severity = "Low"
+    else:
+        issue = "Pothole"
+
+        if len(detections) > 3:
+            severity = "High"
+        elif len(detections) > 1:
+            severity = "Medium"
+        else:
+            severity = "Low"
 
     return {
         "filename": file.filename,
-        "analysis": result
+        "analysis": {
+            "issue": issue,
+            "severity": severity,
+            "count": len(detections)
+        }
     }
 
 
