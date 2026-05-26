@@ -1,6 +1,7 @@
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import shutil
+from fastapi import Form
 import os
 import json
 
@@ -191,15 +192,17 @@ def get_complaints():
 
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    db = SessionLocal()
-
+async def upload_file(
+    file: UploadFile = File(...),
+    lat: float = Form(...),
+    lng: float = Form(...)
+):
     file_location = f"uploads/{file.filename}"
 
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # 🔥 YOLO inference
+    # YOLO inference
     results = model(file_location)
     detections = results[0].boxes
 
@@ -208,27 +211,18 @@ async def upload_file(file: UploadFile = File(...)):
         severity = "Low"
     else:
         issue = "Pothole"
-
-        # 🔥 AREA-BASED severity
-        max_area = 0
-        for box in detections:
-            x1, y1, x2, y2 = box.xyxy[0]
-            area = (x2 - x1) * (y2 - y1)
-            max_area = max(max_area, area)
-
-        if max_area > 50000:
+        if len(detections) > 3:
             severity = "High"
-        elif max_area > 20000:
+        elif len(detections) > 1:
             severity = "Medium"
         else:
             severity = "Low"
 
-    # ⚠️ TEMP location (you can improve later)
-    lat, lng = 28.6139, 77.2090  
-
+    # ✅ FIX: now lat/lng exist
+    db = SessionLocal()
     road_id = find_nearest_road(db, lat, lng)
 
-    # 🔥 AUTO SAVE COMPLAINT
+    # 🔥 AUTO SAVE COMPLAINT (preserved)
     if issue != "No issue detected":
         new_complaint = Complaint(
             type=issue,
@@ -244,12 +238,12 @@ async def upload_file(file: UploadFile = File(...)):
     db.close()
 
     return {
-        "filename": file.filename,
         "analysis": {
             "issue": issue,
             "severity": severity,
             "count": len(detections)
-        }
+        },
+        "road_id": road_id
     }
 
 
