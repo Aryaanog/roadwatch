@@ -27,7 +27,7 @@ Base.metadata.create_all(bind=engine)
 from ultralytics import YOLO
 import cv2
 
-model = YOLO("yolov8n.pt")  # lightweight model
+model = YOLO("best.pt")  # lightweight model
 
 
 import math
@@ -192,14 +192,14 @@ def get_complaints():
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    os.makedirs("uploads", exist_ok=True)
+    db = SessionLocal()
 
     file_location = f"uploads/{file.filename}"
 
     with open(file_location, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # YOLO inference
+    # 🔥 YOLO inference
     results = model(file_location)
     detections = results[0].boxes
 
@@ -209,12 +209,39 @@ async def upload_file(file: UploadFile = File(...)):
     else:
         issue = "Pothole"
 
-        if len(detections) > 3:
+        # 🔥 AREA-BASED severity
+        max_area = 0
+        for box in detections:
+            x1, y1, x2, y2 = box.xyxy[0]
+            area = (x2 - x1) * (y2 - y1)
+            max_area = max(max_area, area)
+
+        if max_area > 50000:
             severity = "High"
-        elif len(detections) > 1:
+        elif max_area > 20000:
             severity = "Medium"
         else:
             severity = "Low"
+
+    # ⚠️ TEMP location (you can improve later)
+    lat, lng = 28.6139, 77.2090  
+
+    road_id = find_nearest_road(db, lat, lng)
+
+    # 🔥 AUTO SAVE COMPLAINT
+    if issue != "No issue detected":
+        new_complaint = Complaint(
+            type=issue,
+            severity=severity,
+            lat=lat,
+            lng=lng,
+            road_id=road_id
+        )
+
+        db.add(new_complaint)
+        db.commit()
+
+    db.close()
 
     return {
         "filename": file.filename,

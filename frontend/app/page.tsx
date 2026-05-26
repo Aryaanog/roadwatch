@@ -113,12 +113,11 @@ export default function Home() {
           if (feature) {
             // ✅ road clicked
             setSelectedRoad(feature.properties);
-          } 
-  
+          }
+ 
           // ✅ map clicked
           const { lng, lat } = e.lngLat;
           setClickedLocation({ lng, lat });
-
 
         }}
       >
