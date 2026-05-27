@@ -1,20 +1,23 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-import shutil
-from fastapi import Form
-import os
-import json
+import shutil, os, json, math, cv2
 
 from database import SessionLocal, engine, Base
 from models import Complaint, Road
-
 from sqlalchemy.orm import Session
-from math import sqrt
+
+from ultralytics import YOLO
 
 app = FastAPI()
 
-# CORS
+# ------------------ CONFIG ------------------
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+model = YOLO("best.pt")
+
+# ------------------ CORS ------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,45 +26,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# CREATE TABLES
 Base.metadata.create_all(bind=engine)
 
-from ultralytics import YOLO
-import cv2
-
-model = YOLO("best.pt")  # lightweight model
-
-
-import math
+# ------------------ UTILS ------------------
 
 def distance_point_to_line(px, py, x1, y1, x2, y2):
-    # Line segment length squared
     line_mag = (x2 - x1)**2 + (y2 - y1)**2
-
     if line_mag == 0:
         return math.sqrt((px - x1)**2 + (py - y1)**2)
 
-    # Projection factor
     u = ((px - x1)*(x2 - x1) + (py - y1)*(y2 - y1)) / line_mag
 
     if u < 0:
-        closest_x, closest_y = x1, y1
+        cx, cy = x1, y1
     elif u > 1:
-        closest_x, closest_y = x2, y2
+        cx, cy = x2, y2
     else:
-        closest_x = x1 + u * (x2 - x1)
-        closest_y = y1 + u * (y2 - y1)
+        cx = x1 + u * (x2 - x1)
+        cy = y1 + u * (y2 - y1)
 
-    return math.sqrt((px - closest_x)**2 + (py - closest_y)**2)
+    return math.sqrt((px - cx)**2 + (py - cy)**2)
 
-
-import math
 
 def find_nearest_road(db, lat, lng):
     roads = db.query(Road).all()
-
     min_distance = float("inf")
-    nearest_road_id = None
+    nearest = None
 
     for road in roads:
         coords = json.loads(road.geometry)
@@ -74,24 +64,47 @@ def find_nearest_road(db, lat, lng):
 
             if dist < min_distance:
                 min_distance = dist
-                nearest_road_id = road.id
+                nearest = road
 
-    # threshold (important)
-    if min_distance > 0.0005:
-        return None
+    return nearest if min_distance < 0.0005 else None
 
-    print("Assigned road_id:", nearest_road_id)
-    return nearest_road_id
+
+# ------------------ ROUTING LOGIC ------------------
+
+def get_authority(road: Road):
+    road_type = (road.type or "").lower()
+
+    if "nh" in road_type or "national" in road_type:
+        return {
+            "authority": "NHAI",
+            "engineer": "Executive Engineer - NHAI",
+            "email": "nhai.engineer@gov.in"
+        }
+
+    if "sh" in road_type or "state" in road_type:
+        return {
+            "authority": "State PWD",
+            "engineer": "Executive Engineer - PWD",
+            "email": "pwd.engineer@gov.in"
+        }
+
+    return {
+        "authority": "Municipal Corporation",
+        "engineer": "City Engineer",
+        "email": "city.engineer@gov.in"
+    }
+
+
+# ------------------ ROADS API ------------------
 
 @app.get("/roads")
 def get_roads():
-    # update_road_conditions() 
     db = SessionLocal()
 
     roads = db.query(Road).all()
     complaints = db.query(Complaint).all()
 
-    # count complaints per road
+    # complaint count per road
     count_map = {}
     for c in complaints:
         if c.road_id:
@@ -102,13 +115,15 @@ def get_roads():
     for r in roads:
         count = count_map.get(r.id, 0)
 
-        # 🔥 dynamic condition
+        # dynamic condition
         if count > 5:
             condition = "Poor"
         elif count > 2:
             condition = "Average"
         else:
             condition = "Good"
+
+        authority = get_authority(r)
 
         features.append({
             "type": "Feature",
@@ -118,21 +133,25 @@ def get_roads():
                 "condition": condition,
                 "lastRepaired": r.lastRepaired,
                 "contractor": r.contractor,
+
+                # 💰 Budget transparency
                 "budgetSanctioned": r.budgetSanctioned,
                 "budgetSpent": r.budgetSpent,
+                "budgetSource": "PWD / Government Tender Database",
+
+                # 📊 Complaints
                 "complaints": count,
 
+                # 📍 Routing info
+                "authority": authority["authority"],
+                "engineer": authority["engineer"],
+                "engineerEmail": authority["email"],
             },
             "geometry": {
                 "type": "LineString",
                 "coordinates": json.loads(r.geometry)
             }
         })
-
-        
-        # print(len(json.loads(r.geometry)))
-
-    
 
     db.close()
 
@@ -141,35 +160,9 @@ def get_roads():
         "features": features
     }
 
-@app.post("/report")
-def report_issue(data: dict):
-    db = SessionLocal()
 
-    lat = data["location"]["lat"]
-    lng = data["location"]["lng"]
+# ------------------ COMPLAINTS ------------------
 
-    road_id = find_nearest_road(db, lat, lng)  # 🔥 NEW
-    print("Assigned road_id:", road_id)
-
-    new_complaint = Complaint(
-        type=data.get("type"),
-        severity=data.get("severity", "Unknown"),
-        lat=lat,
-        lng=lng,
-        road_id=road_id   # 🔥 LINKED
-    )
-
-    db.add(new_complaint)
-    db.commit()
-    db.refresh(new_complaint)
-
-    db.close()
-
-    return {"message": "Complaint saved"}
-
-
-
-# 🔥 GET COMPLAINTS
 @app.get("/complaints")
 def get_complaints():
     db = SessionLocal()
@@ -188,9 +181,10 @@ def get_complaints():
         })
 
     db.close()
-
     return result
 
+
+# ------------------ IMAGE UPLOAD + YOLO ------------------
 
 @app.post("/upload")
 async def upload_file(
@@ -198,48 +192,46 @@ async def upload_file(
     lat: float = Form(...),
     lng: float = Form(...)
 ):
-    file_location = f"uploads/{file.filename}"
+    file_path = f"{UPLOAD_DIR}/{file.filename}"
 
-    with open(file_location, "wb") as buffer:
+    # save file
+    with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # YOLO inference
-    results = model(file_location)
+    # YOLO detection
+    results = model(file_path)
     detections = results[0].boxes
 
     plotted = results[0].plot()
-
-    output_path = f"uploads/output_{file.filename}"
+    output_filename = f"output_{file.filename}"
+    output_path = f"{UPLOAD_DIR}/{output_filename}"
     cv2.imwrite(output_path, plotted)
 
+    # detection logic
     if len(detections) == 0:
         issue = "No issue detected"
         severity = "Low"
     else:
         issue = "Pothole"
-        if len(detections) > 3:
-            severity = "High"
-        elif len(detections) > 1:
-            severity = "Medium"
-        else:
-            severity = "Low"
+        severity = "High" if len(detections) > 3 else "Medium" if len(detections) > 1 else "Low"
 
-    # ✅ FIX: now lat/lng exist
     db = SessionLocal()
-    road_id = find_nearest_road(db, lat, lng)
+    road = find_nearest_road(db, lat, lng)
 
-    # 🔥 AUTO SAVE COMPLAINT (preserved)
-    if issue != "No issue detected":
+    # save complaint
+    if issue != "No issue detected" and road:
         new_complaint = Complaint(
             type=issue,
             severity=severity,
             lat=lat,
             lng=lng,
-            road_id=road_id
+            road_id=road.id
         )
-
         db.add(new_complaint)
         db.commit()
+
+    # routing info
+    authority = get_authority(road) if road else None
 
     db.close()
 
@@ -249,22 +241,17 @@ async def upload_file(
             "severity": severity,
             "count": len(detections)
         },
-        "road_id": road_id
+
+        # 🖼️ bounding box image
+        "image_url": f"http://127.0.0.1:8000/uploads/{output_filename}",
+
+        # 📧 engineer contact
+        "engineerEmail": authority["email"] if authority else None,
+        "mail_link": f"https://mail.google.com/mail/?view=cm&fs=1&to={authority['email']}&su=Road Issue&body=Pothole detected at location ({lat},{lng})" if authority else None,
+
+        "road_id": road.id if road else None
     }
 
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-# 🔥 ROUTING LOGIC
-def route_complaint(lat, lng):
-    if lat > 28.6:
-        return {
-            "authority": "NHAI",
-            "officer": "Rajesh Kumar",
-            "contact": "nhai@example.com"
-        }
-    else:
-        return {
-            "authority": "Municipal Corporation",
-            "officer": "Amit Sharma",
-            "contact": "municipal@example.com"
-        }
+# ------------------ STATIC ------------------
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
