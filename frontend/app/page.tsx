@@ -1,57 +1,157 @@
 "use client";
 
-import Map, { Source, Layer, Marker } from "react-map-gl/mapbox";
+import Map, { Layer, Marker, Source } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { useState, useEffect } from "react";
 import axios from "axios";
+import { ChangeEvent, DragEvent, useEffect, useState } from "react";
+
+const API_BASE_URL = "http://127.0.0.1:8000";
+const POTHOLE_RED = "#f87171";
+const POTHOLE_RED_DARK = "#ef4444";
+
+type Location = {
+  lat: number;
+  lng: number;
+};
+
+type Road = {
+  [key: string]: string | number | null | undefined;
+  name?: string;
+  type?: string;
+  highway?: string;
+  condition?: string;
+  lastRepaired?: string;
+  contractor?: string;
+  budgetSanctioned?: number | string | null;
+  budgetSpent?: number | string | null;
+  complaints?: number;
+};
+
+type Complaint = {
+  type?: string;
+  severity: string;
+  location: Location;
+};
+
+type AnalysisResult = {
+  issue: string;
+  severity: string;
+  count: number;
+};
 
 export default function Home() {
-  const [roadData, setRoadData] = useState<any>(null);
-  const [complaints, setComplaints] = useState<any[]>([]);
-  const [clickedLocation, setClickedLocation] = useState<any>(null);
-  const [selectedRoad, setSelectedRoad] = useState<any>(null);
-  const [viewMode, setViewMode] = useState("normal"); // 🔥 NEW
-  const [analysisResult, setAnalysisResult] = useState<any>(null);
-  const [isOnline, setIsOnline] = useState(true);
+  const [roadData, setRoadData] = useState<unknown>(null);
+  const [complaints, setComplaints] = useState<Complaint[]>([]);
+  const [clickedLocation, setClickedLocation] = useState<Location | null>(null);
+  const [selectedRoad, setSelectedRoad] = useState<Road | null>(null);
+  const [viewMode, setViewMode] = useState("normal");
+
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [selectedFileName, setSelectedFileName] = useState("");
+
+  const fetchComplaints = () => {
+    axios.get(`${API_BASE_URL}/complaints`).then((res) => setComplaints(res.data));
+  };
 
   useEffect(() => {
-    setIsOnline(navigator.onLine);
-
-    window.addEventListener("online", () => setIsOnline(true));
-    window.addEventListener("offline", () => setIsOnline(false));
-
-    axios.get("http://127.0.0.1:8000/roads")
-      .then(res => setRoadData(res.data));
-
+    axios.get(`${API_BASE_URL}/roads`).then((res) => setRoadData(res.data));
     fetchComplaints();
   }, []);
 
-  const fetchComplaints = () => {
-    axios.get("http://127.0.0.1:8000/complaints")
-      .then(res => setComplaints(res.data));
+  const getRoadKey = (road: Road | null) => road?.name || road?.["@id"] || "";
+
+  const formatMoney = (amount: number | string | null | undefined) => {
+    if (amount === undefined || amount === null || amount === "") return "Not published";
+
+    const numericAmount = Number(amount);
+    if (Number.isNaN(numericAmount)) return String(amount);
+
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 0,
+    }).format(numericAmount);
+  };
+
+  const getAuthority = (road: Road | null) => {
+    const roadType = String(road?.type || "").toLowerCase();
+
+    if (roadType.includes("nh") || roadType.includes("national")) {
+      return "National highways authority / Executive Engineer";
+    }
+
+    if (roadType.includes("sh") || roadType.includes("state")) {
+      return "State PWD Executive Engineer";
+    }
+
+    if (roadType.includes("mdr") || roadType.includes("major")) {
+      return "District Roads Division";
+    }
+
+    return "Local road authority";
+  };
+
+  const uploadImage = async (file: File) => {
+    if (!clickedLocation || !selectedRoad) return;
+
+    try {
+      setLoading(true);
+      setSelectedFileName(file.name);
+
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("lat", String(clickedLocation.lat));
+      formData.append("lng", String(clickedLocation.lng));
+
+      const res = await axios.post(`${API_BASE_URL}/upload`, formData);
+      setAnalysisResult(res.data.analysis);
+      fetchComplaints();
+    } catch (err) {
+      console.error(err);
+      alert("Upload failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) uploadImage(file);
+  };
+
+  const handleDrag = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(event.type === "dragenter" || event.type === "dragover");
+  };
+
+  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragActive(false);
+
+    const file = event.dataTransfer.files?.[0];
+    if (file) uploadImage(file);
   };
 
   return (
-    <div className="w-screen h-screen">
-
-      {/* 🌐 STATUS */}
-      {!isOnline && (
-        <div className="absolute top-4 right-4 bg-red-500 text-white px-3 py-1 z-50">
-          Offline
-        </div>
-      )}
-
-      {/* 🔥 TOGGLE BUTTON */}
-      <div className="absolute top-4 left-4 z-50">
+    <div className="h-screen w-screen bg-slate-950 text-slate-900">
+      <div className="absolute left-4 top-4 z-50 flex overflow-hidden rounded-lg border border-white/70 bg-white shadow-lg">
         <button
-          className="bg-blue-500 text-white px-3 py-1 mr-2 rounded"
           onClick={() => setViewMode("normal")}
+          className={`px-4 py-2 text-sm font-semibold transition ${
+            viewMode === "normal" ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-100"
+          }`}
         >
-          Road View
+          Road
         </button>
         <button
-          className="bg-red-500 text-white px-3 py-1 rounded"
           onClick={() => setViewMode("heatmap")}
+          className={`px-4 py-2 text-sm font-semibold transition ${
+            viewMode === "heatmap" ? "bg-red-400 text-white" : "bg-white text-slate-700 hover:bg-red-50"
+          }`}
         >
           Heatmap
         </button>
@@ -60,50 +160,46 @@ export default function Home() {
       <Map
         reuseMaps
         mapboxAccessToken={process.env.NEXT_PUBLIC_MAPBOX_TOKEN}
-        initialViewState={{
-          longitude: 77.2090,
-          latitude: 28.6139,
-          zoom: 12
-        }}
+        initialViewState={{ longitude: 77.209, latitude: 28.6139, zoom: 12 }}
         mapStyle="mapbox://styles/mapbox/streets-v12"
         interactiveLayerIds={["roads-layer"]}
-
         onClick={(e) => {
           const feature = e.features?.[0];
           const { lng, lat } = e.lngLat;
 
-          if (feature && feature.layer.id === "roads-layer") {
-            // ✅ ONLY react to road layer
-            setSelectedRoad(feature.properties);
+          if (feature?.layer?.id === "roads-layer") {
+            const nextRoad = (feature.properties || {}) as Road;
+            const isNextRoad = getRoadKey(nextRoad) !== getRoadKey(selectedRoad);
+
+            if (isNextRoad) {
+              setAnalysisResult(null);
+              setSelectedFileName("");
+            }
+
+            setSelectedRoad(nextRoad);
             setClickedLocation({ lng, lat });
           } else {
-            // ✅ map click
-            setClickedLocation({ lng, lat });
             setSelectedRoad(null);
+            setClickedLocation({ lng, lat });
           }
         }}
-
       >
-
-        {/* 🔥 HEATMAP (OVERLAY, DOES NOT REMOVE ROADS) */}
-        {viewMode === "heatmap" && complaints.length > 0 && (
+        {viewMode === "heatmap" && (
           <Source
             id="heat"
             type="geojson"
             data={{
               type: "FeatureCollection",
-              features: complaints.map(c => ({
+              features: complaints.map((c) => ({
                 type: "Feature",
                 properties: {
-                  intensity:
-                    c.severity === "High" ? 3 :
-                    c.severity === "Medium" ? 2 : 1
+                  intensity: c.severity === "High" ? 3 : c.severity === "Medium" ? 2 : 1,
                 },
                 geometry: {
                   type: "Point",
-                  coordinates: [c.location.lng, c.location.lat]
-                }
-              }))
+                  coordinates: [c.location.lng, c.location.lat],
+                },
+              })),
             }}
           >
             <Layer
@@ -111,176 +207,188 @@ export default function Home() {
               type="heatmap"
               paint={{
                 "heatmap-weight": ["get", "intensity"],
-                "heatmap-intensity": 1.5,
                 "heatmap-radius": 25,
-                "heatmap-opacity": 0.6,
+                "heatmap-opacity": 0.55,
                 "heatmap-color": [
-                  "interpolate", ["linear"], ["heatmap-density"],
-                  0, "blue",
-                  0.3, "cyan",
-                  0.5, "yellow",
-                  0.7, "orange",
-                  1, "red"
-                ]
+                  "interpolate",
+                  ["linear"],
+                  ["heatmap-density"],
+                  0,
+                  "rgba(255, 241, 242, 0)",
+                  0.35,
+                  "#fecdd3",
+                  0.7,
+                  POTHOLE_RED,
+                  1,
+                  POTHOLE_RED_DARK,
+                ],
               }}
             />
           </Source>
         )}
 
-        {/* 🛣️ ROADS (ALWAYS VISIBLE) */}
         {roadData && (
-          <Source id="roads" type="geojson" data={roadData}>
-            {/* ✨ SHADOW LAYER */}
+          <Source id="roads" type="geojson" data={roadData as never}>
             <Layer
               id="roads-shadow"
               type="line"
               paint={{
                 "line-color": "#000",
                 "line-width": 10,
-                "line-opacity": 0.2
+                "line-opacity": 0.15,
               }}
             />
+
             <Layer
               id="roads-layer"
               type="line"
-              layout={{
-                "line-cap": "round",
-                "line-join": "round"
-              }}
               paint={{
                 "line-color": [
                   "case",
                   ["==", ["get", "name"], selectedRoad?.name || ""],
-                  "#00FFFF", // 🔥 highlight color (cyan)
-                  [
-                    "match",
-                    ["get", "condition"],
-                    "Good", "#4CAF50",
-                    "Average", "#FFC107",
-                    "Poor", "#F44336",
-                    "#999"
-                  ]
+                  "#166534",
+                  "#86efac",
                 ],
                 "line-width": [
                   "case",
                   ["==", ["get", "name"], selectedRoad?.name || ""],
-                  8, // ✅ highlighted
-                  [
-                    "match",
-                    ["get", "type"],
-                    "primary", 6,
-                    "secondary", 4,
-                    "tertiary", 2,
-                    3
-                  ]
-                ]
+                  8,
+                  4,
+                ],
               }}
             />
           </Source>
         )}
 
-        {/* 📍 MARKERS */}
-        {complaints.map((c, i) => (
-          <Marker key={i} longitude={c.location.lng} latitude={c.location.lat}>
+        {complaints.map((complaint, index) => (
+          <Marker key={index} longitude={complaint.location.lng} latitude={complaint.location.lat}>
             <div
+              aria-label={`${complaint.severity} severity pothole report`}
+              title={`${complaint.severity} severity pothole report`}
               style={{
-                width: "10px",
-                height: "10px",
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
                 backgroundColor:
-                  c.severity === "High" ? "red" :
-                  c.severity === "Medium" ? "orange" : "green",
-                borderRadius: "50%"
+                  complaint.severity === "High"
+                    ? POTHOLE_RED
+                    : complaint.severity === "Medium"
+                      ? "#fb923c"
+                      : "#86efac",
+                border: "2px solid white",
+                boxShadow: "0 4px 12px rgba(15, 23, 42, 0.28)",
               }}
             />
           </Marker>
         ))}
-
       </Map>
 
-      {/* 🛣️ ROAD INFO PANEL (separate) */}
       {selectedRoad && (
-        <div className="absolute bottom-4 left-4 bg-white p-4 shadow w-64 z-50">
-          <h3 className="font-bold">{selectedRoad.name}</h3>
-          <p>Condition: {selectedRoad.condition}</p>
+        <div className="absolute bottom-4 left-4 z-50 w-[min(25rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-4 shadow-xl">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase text-slate-500">Selected road</p>
+              <h2 className="text-lg font-bold leading-tight text-slate-950">{selectedRoad.name || "Unnamed road"}</h2>
+            </div>
+            <span className="rounded-md bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
+              {selectedRoad.condition || "Unknown"}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <p className="text-xs text-slate-500">Road type</p>
+              <p className="font-semibold">{selectedRoad.type || selectedRoad.highway || "Not classified"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Last relaid</p>
+              <p className="font-semibold">{selectedRoad.lastRepaired || "Not published"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Contractor</p>
+              <p className="font-semibold">{selectedRoad.contractor || "Not published"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Complaints</p>
+              <p className="font-semibold">{selectedRoad.complaints ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Sanctioned</p>
+              <p className="font-semibold">{formatMoney(selectedRoad.budgetSanctioned)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Spent</p>
+              <p className="font-semibold">{formatMoney(selectedRoad.budgetSpent)}</p>
+            </div>
+          </div>
+
+          <div className="mt-3 border-t border-slate-200 pt-3 text-sm">
+            <p className="text-xs text-slate-500">Complaint routing</p>
+            <p className="font-semibold">{getAuthority(selectedRoad)}</p>
+            <p className="mt-1 text-xs text-slate-500">Budget source: local road registry, with OSM geometry support</p>
+          </div>
         </div>
       )}
 
-      {/* 📤 UPLOAD PANEL (only when clicking location on a road) */}
       {clickedLocation && selectedRoad && (
-        <div className="absolute top-16 left-4 bg-white p-4 shadow z-50 w-72">
-          <h3 className="font-bold mb-2">{selectedRoad.name}</h3>
-          <p className="text-sm mb-2">
-            Condition: {selectedRoad.condition}
-          </p>
+        <div className="absolute left-4 top-20 z-50 w-[min(22rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-4 shadow-xl">
+          <div className="mb-3">
+            <p className="text-xs font-semibold uppercase text-slate-500">Road image upload</p>
+            <h3 className="font-bold leading-tight text-slate-950">{selectedRoad.name || "Selected road"}</h3>
+          </div>
 
-          {/* 📤 UPLOAD */}
-          <input
-            type="file"
-            className="mb-3"
-            onChange={async (e) => {
-              try {
-                const file = e.target.files?.[0];
-                if (!file) return;
+          <label
+            onDragEnter={handleDrag}
+            onDragOver={handleDrag}
+            onDragLeave={handleDrag}
+            onDrop={handleDrop}
+            className={`flex min-h-36 cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed p-4 text-center transition ${
+              dragActive ? "border-red-300 bg-red-50" : "border-slate-300 bg-slate-50 hover:border-slate-400 hover:bg-white"
+            }`}
+          >
+            <input type="file" accept="image/*" className="sr-only" onChange={handleFileChange} />
+            <span className="text-sm font-semibold text-slate-900">Drag and drop a road photo</span>
+            <span className="mt-1 text-sm text-slate-600">or click to upload from your device</span>
+            {selectedFileName && (
+              <span className="mt-3 max-w-full truncate rounded-md bg-white px-2 py-1 text-xs font-medium text-slate-600">
+                {selectedFileName}
+              </span>
+            )}
+          </label>
 
-                console.log("Uploading file...");
+          {loading && <p className="mt-3 text-sm font-semibold text-blue-600">Analyzing image...</p>}
 
-                const formData = new FormData();
-                formData.append("file", file);
-                formData.append("lat", clickedLocation.lat);
-                formData.append("lng", clickedLocation.lng);
-
-                const res = await axios.post(
-                  "http://127.0.0.1:8000/upload",
-                  formData,
-                  {
-                    headers: { "Content-Type": "multipart/form-data" }
-                  }
-                );
-
-                console.log("Upload response:", res.data);
-
-                const analysis = res.data.analysis;
-
-                await axios.post("http://127.0.0.1:8000/report", {
-                  type: analysis.issue,
-                  severity: analysis.severity,
-                  location: clickedLocation
-                });
-
-                console.log("Report submitted");
-
-                setAnalysisResult(analysis);
-
-                fetchComplaints();
-
-              } catch (err) {
-                console.error("UPLOAD ERROR:", err);
-                alert("Upload failed. Check console.");
-              }
-            }}
-          />
-
-          {/* 🔥 SHOW ANALYSIS RESULT */}
-          {analysisResult && (
-            <div className="mt-2 p-2 bg-gray-100 rounded text-sm">
-              <p><b>Issue:</b> {analysisResult.issue}</p>
-              <p><b>Severity:</b> {analysisResult.severity}</p>
-              <p><b>Count:</b> {analysisResult.count}</p>
+          {analysisResult && !loading && (
+            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+              <p className="mb-2 font-bold text-slate-950">AI result</p>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <p className="text-xs text-slate-500">Issue</p>
+                  <p className="font-semibold">{analysisResult.issue}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Severity</p>
+                  <p className="font-semibold">{analysisResult.severity}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-slate-500">Count</p>
+                  <p className="font-semibold">{analysisResult.count}</p>
+                </div>
+              </div>
             </div>
           )}
 
           <button
-            className="bg-gray-500 text-white px-3 py-1 rounded mt-2"
+            className="mt-3 w-full rounded-lg bg-slate-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-900"
             onClick={() => {
               setClickedLocation(null);
               setSelectedRoad(null);
             }}
           >
-            Cancel
+            Close
           </button>
         </div>
       )}
-
     </div>
   );
 }

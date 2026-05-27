@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import shutil
 from fastapi import Form
 import os
@@ -206,6 +207,11 @@ async def upload_file(
     results = model(file_location)
     detections = results[0].boxes
 
+    plotted = results[0].plot()
+
+    output_path = f"uploads/output_{file.filename}"
+    cv2.imwrite(output_path, plotted)
+
     if len(detections) == 0:
         issue = "No issue detected"
         severity = "Low"
@@ -246,6 +252,7 @@ async def upload_file(
         "road_id": road_id
     }
 
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # 🔥 ROUTING LOGIC
 def route_complaint(lat, lng):
