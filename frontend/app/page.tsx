@@ -211,7 +211,7 @@ export default function Home() {
               viewMode === "normal" ? (darkMode ? "bg-slate-800 text-sky-400" : "bg-slate-900 text-white") : "text-slate-500"
             }`}
           >
-            Community Map
+            Navigation Map
           </button>
           <button
             type="button"

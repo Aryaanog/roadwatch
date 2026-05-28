@@ -13,8 +13,8 @@ class Road(Base):
 
     lastRepaired = Column("lastRepaired", String) 
     contractor = Column(String)
-    budgetSanctioned = Column(Float)  
-    budgetSpent = Column(Float)
+    budgetSanctioned = Column(Float, default=0.0, server_default="0.0")
+    budgetSpent = Column(Float, default=0.0, server_default="0.0")
 
     geometry = Column(Text)  
 
