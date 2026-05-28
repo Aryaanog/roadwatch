@@ -1,6 +1,34 @@
-from sqlalchemy import Column, Integer, String, Float, Text
-from database import Base   # ✅ FIXED
+from sqlalchemy import Column, Integer, String, Float, Text, ForeignKey
+from sqlalchemy.orm import relationship
+from database import Base
 
+# ==================== 1. DEFINE THIS FIRST ====================
+class Road(Base):
+    __tablename__ = "roads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    type = Column(String)
+    condition = Column(String)
+
+    lastRepaired = Column("lastRepaired", String) 
+    contractor = Column(String)
+    budgetSanctioned = Column(Float)  
+    budgetSpent = Column(Float)
+
+    geometry = Column(Text)  
+
+    # 🌍 Global citizen scaling parameters
+    currency_code = Column(String, default="INR", server_default="INR")       
+    budget_source = Column(String, default="Public Record Ledger")
+    authority_name = Column(String, default="Local Roads Authority")
+    authority_email = Column(String, default="community-safety@city.gov")
+
+    # This can safely reference "Complaint" because Python resolves strings dynamically at runtime
+    complaints = relationship("Complaint", back_populates="road", cascade="all, delete-orphan")
+
+
+# ==================== 2. DEFINE THIS SECOND ====================
 class Complaint(Base):
     __tablename__ = "complaints"
 
@@ -9,20 +37,8 @@ class Complaint(Base):
     severity = Column(String)
     lat = Column(Float)
     lng = Column(Float)
-    road_id = Column(Integer)   
-
-class Road(Base):
-    __tablename__ = "roads"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String)
-    type = Column(String)
-    condition = Column(String)
-
-    lastRepaired = Column("lastRepaired", String)  # ✅ FIX
-
-    contractor = Column(String)
-    budgetSanctioned = Column(Integer)
-    budgetSpent = Column(Integer)
-
-    geometry = Column(Text)
+    
+    # ✅ PostgreSQL can now find "roads.id" successfully!
+    road_id = Column(Integer, ForeignKey("roads.id", ondelete="SET NULL"), nullable=True)
+    
+    road = relationship("Road", back_populates="complaints")
